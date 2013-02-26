@@ -1,0 +1,268 @@
+Hack by Robert Scheck <robert@fedoraproject.org> for php-magickwand >= 0.1.9, which
+unbreaks php-magickwand, because upstream is too lazy to use the ABI sane. So let's
+avoid "undefined symbol: MagickRecolorImage" errors on ImageMagick < 6.3.1.
+
+--- magickwand-0.1.9/ChangeLog			2006-12-30 19:16:10.000000000 +0100
++++ magickwand-0.1.8/ChangeLog			2005-09-13 11:39:32.000000000 +0200
+@@ -1,12 +1,10 @@
+-2006-12-31  6.3.1-6 Cristy  <omicronpersei8@image...>
+-  * Add MagickRecolorImage() method
+-  * Requires ImageMagick 6.3.1 or above
++MagickWand for PHP ChangeLog
++(scroll to the bottom to see the latest updates)
+ 
+ ##############################################################################
+ 
+ Sometime in April 2004...
+ 
+-
+ - Created "MagickWand :: PHP ImageMagick 6.0+ API" v0.0.1 by using Perl (yes,
+   I am aware of the irony) to scan the Wand C API for any exported functions,
+   and doing some rough substitutions to set up the associated  PHP functions
+--- magickwand-0.1.9/magickwand.c		2007-01-06 01:11:51.000000000 +0100
++++ magickwand-0.1.8/magickwand.c		2005-09-13 17:20:32.000000000 +0200
+@@ -3,8 +3,8 @@
+ 
+    Author: Ouinnel Watson
+    Homepage: 
+-   Current Version: 0.1.9
+-   Release Date: 2006-12-30
++   Current Version: 0.1.8
++   Release Date: 2005-09-12
+ */
+ 
+ #include "magickwand_inc.h"
+@@ -1006,7 +1006,6 @@
+ 	/* Custom PHP function; accepts a PHP array of filenames and attempts to read them all into the MagickWand */
+ 	ZEND_FE( magickreadimages, NULL )
+ 
+-	ZEND_FE( magickrecolorimage, NULL )
+ 	ZEND_FE( magickreducenoiseimage, NULL )
+ 	ZEND_FE( magickremoveimage, NULL )
+ 	ZEND_FE( magickremoveimageprofile, NULL )
+@@ -6170,7 +6169,7 @@
+ 	zval *mgck_wnd_rsrc_zvl_p;
+ 	char *name;
+ 	int name_len;
+-	size_t profile_len = 0;
++	unsigned long profile_len = 0;
+ 
+ 	MW_GET_3_ARG( "rs", &mgck_wnd_rsrc_zvl_p, &name, &name_len );
+ 
+@@ -6720,7 +6719,7 @@
+ }
+ /* }}} */
+ 
+-/* {{{ proto bool MagickMatteFloodfillImage( MagickWand mgck_wnd, float alpha, float fuzz, mixed bordercolor_pxl_wnd, int x, int y )
++/* {{{ proto bool MagickMatteFloodfillImage( MagickWand mgck_wnd, Quantum opacity, float fuzz, mixed bordercolor_pxl_wnd, int x, int y )
+ */
+ ZEND_FUNCTION( magickmattefloodfillimage )
+ {
+@@ -6730,18 +6729,25 @@
+ 	PixelWand *bordercolor_pxl_wnd;
+ 	zval ***zvl_pp_args_arr;
+ 	int arg_count, is_script_pxl_wnd;
+-	double alpha, fuzz;
++	double opacity, fuzz;
+ 	long x, y;
+ 
+ 	MW_GET_ARGS_ARRAY_EX(	arg_count, (arg_count != 6),
+ 							zvl_pp_args_arr,
+ 							MagickWand, mgck_wnd,
+-							"a MagickWand resource, an alpha value, a fuzz value, "  \
++							"a MagickWand resource, a Quantum opacity value, a fuzz value, "  \
+ 							"a bordercolor PixelWand resource (or ImageMagick color string), "  \
+ 							"and the x and y ordinates of the starting pixel" );
+ 
+ 	convert_to_double_ex( zvl_pp_args_arr[1] );
+-	alpha =  Z_DVAL_PP( zvl_pp_args_arr[1] );
++	opacity =  Z_DVAL_PP( zvl_pp_args_arr[1] );
++
++	if ( opacity < 0.0 || opacity > MW_QuantumRange ) {
++		zend_error( MW_E_ERROR, "%s(): the value of the opacity Quantum color argument was invalid. "  \
++								"Quantum color values must match \"0 <= color_val <= %0.0f\"",
++								get_active_function_name( TSRMLS_C ), MW_QuantumRange );
++		return;
++	}
+ 
+ 	convert_to_double_ex( zvl_pp_args_arr[2] );
+ 	fuzz =     Z_DVAL_PP( zvl_pp_args_arr[2] );
+@@ -6798,7 +6804,7 @@
+ 		}
+ 	}
+ 
+-	MW_BOOL_FUNC_RETVAL_BOOL( MagickMatteFloodfillImage( mgck_wnd, alpha, fuzz, bordercolor_pxl_wnd, x, y ) );
++	MW_BOOL_FUNC_RETVAL_BOOL( MagickMatteFloodfillImage( mgck_wnd, (Quantum) opacity, fuzz, bordercolor_pxl_wnd, x, y ) );
+ 
+ 	efree( zvl_pp_args_arr );
+ 
+@@ -7195,7 +7201,7 @@
+ }
+ /* }}} */
+ 
+-/* {{{ proto bool MagickPaintTransparentImage( MagickWand mgck_wnd, mixed target_pxl_wnd [, float alpha [, float fuzz]] )
++/* {{{ proto bool MagickPaintTransparentImage( MagickWand mgck_wnd, mixed target_pxl_wnd [, float opacity [, float fuzz]] )
+ */
+ ZEND_FUNCTION( magickpainttransparentimage )
+ {
+@@ -7205,7 +7211,7 @@
+ 	PixelWand *target_pxl_wnd;
+ 	zval ***zvl_pp_args_arr;
+ 	int arg_count, is_script_pxl_wnd;
+-	double alpha = (double) 0.0, fuzz = 0.0;
++	double opacity = (double) TransparentOpacity, fuzz = 0.0;
+ 
+ 	MW_GET_ARGS_ARRAY_EX(	arg_count, (arg_count < 2 || arg_count > 4),
+ 							zvl_pp_args_arr,
+@@ -7216,7 +7222,7 @@
+ 
+ 	if ( arg_count > 2 ) {
+ 		convert_to_double_ex( zvl_pp_args_arr[2] );
+-		alpha =  Z_DVAL_PP( zvl_pp_args_arr[2] );
++		opacity =  Z_DVAL_PP( zvl_pp_args_arr[2] );
+ 
+ 		if ( arg_count == 4 ) {
+ 			convert_to_double_ex( zvl_pp_args_arr[3] );
+@@ -7226,7 +7232,7 @@
+ 
+ 	MW_SETUP_PIXELWAND_FROM_ARG_ARRAY( zvl_pp_args_arr, 1, 2, target_pxl_wnd, is_script_pxl_wnd );
+ 
+-	MW_BOOL_FUNC_RETVAL_BOOL( MagickPaintTransparentImage( mgck_wnd, target_pxl_wnd, alpha, fuzz ) );
++	MW_BOOL_FUNC_RETVAL_BOOL( MagickPaintTransparentImage( mgck_wnd, target_pxl_wnd, (Quantum) opacity, fuzz ) );
+ 
+ 	efree( zvl_pp_args_arr );
+ 
+@@ -7335,7 +7341,7 @@
+ 	MW_BOOL_FUNC_RETVAL_BOOL( MagickProfileImage( mgck_wnd,
+ 												  name,
+ 												  (void *) (profile_len == 0 ? NULL : profile),
+-												  (size_t) profile_len
++												  (unsigned long) profile_len
+ 							  )
+ 	);
+ }
+@@ -7722,50 +7728,6 @@
+ }
+ /* }}} */
+ 
+-/* {{{ proto bool MagickRecolorImage( MagickWand mgck_wnd, array kernel_array )
+-*/
+-ZEND_FUNCTION( magickrecolorimage )
+-{
+-	MW_PRINT_DEBUG_INFO
+-
+-	MagickWand *mgck_wnd;
+-	zval *mgck_wnd_rsrc_zvl_p, *zvl_arr, **zvl_pp_element;
+-	unsigned long order, i = 0;
+-	double num_elements, *color_matrix_arr;
+-	HashPosition pos;
+-
+-	MW_GET_2_ARG( "ra", &mgck_wnd_rsrc_zvl_p, &zvl_arr );
+-
+-	num_elements = (double) zend_hash_num_elements( Z_ARRVAL_P( zvl_arr ) );
+-
+-	if ( num_elements < 1 ) {
+-		MW_SPIT_FATAL_ERR( "the array parameter was empty" );
+-		return;
+-	}
+-
+-	order = (unsigned long) sqrt( num_elements );
+-
+-	if ( pow( (double) order, 2 ) != num_elements ) {
+-		MW_SPIT_FATAL_ERR( "array parameter length was not square; array must contain a square number amount of doubles" );
+-		return;
+-	}
+-
+-	MW_GET_POINTER_FROM_RSRC( MagickWand, mgck_wnd, &mgck_wnd_rsrc_zvl_p );
+-
+-	MW_ARR_ECALLOC( double, color_matrix_arr, num_elements );
+-
+-	MW_ITERATE_OVER_PHP_ARRAY( pos, zvl_arr, zvl_pp_element ) {
+-		convert_to_double_ex( zvl_pp_element );
+-
+-		color_matrix_arr[i++] = Z_DVAL_PP( zvl_pp_element );
+-	}
+-
+-		MW_BOOL_FUNC_RETVAL_BOOL( MagickRecolorImage( mgck_wnd, order, color_matrix_arr ) );
+-
+-	efree( color_matrix_arr );
+-}
+-/* }}} */
+-
+ /* {{{ proto bool MagickReduceNoiseImage( MagickWand mgck_wnd, float radius )
+ */
+ ZEND_FUNCTION( magickreducenoiseimage )
+@@ -7796,7 +7758,7 @@
+ 	zval *mgck_wnd_rsrc_zvl_p;
+ 	char *name;
+ 	int name_len;
+-	size_t profile_len = 0;
++	unsigned long profile_len = 0;
+ 
+ 	MW_GET_3_ARG( "rs", &mgck_wnd_rsrc_zvl_p, &name, &name_len );
+ 
+@@ -8715,7 +8677,7 @@
+ 
+ 	MW_GET_POINTER_FROM_RSRC( MagickWand, mgck_wnd, &mgck_wnd_rsrc_zvl_p );
+ 
+-	MW_BOOL_FUNC_RETVAL_BOOL( MagickSetImageProfile( mgck_wnd, name, (void *) profile, (size_t) profile_len ) );
++	MW_BOOL_FUNC_RETVAL_BOOL( MagickSetImageProfile( mgck_wnd, name, (void *) profile, (unsigned long) profile_len ) );
+ }
+ /* }}} */
+ 
+--- magickwand-0.1.9/magickwand.h		2006-12-30 19:14:35.000000000 +0100
++++ magickwand-0.1.8/magickwand.h		2005-09-13 10:45:56.000000000 +0200
+@@ -2,8 +2,8 @@
+ 
+    Author: Ouinnel Watson
+    Homepage: 
+-   Current Version: 0.1.9
+-   Release Date: 2006-12-30
++   Current Version: 0.1.8
++   Release Date: 2005-09-12
+ */
+ 
+ #ifndef PHP_MAGICKWAND_H
+@@ -22,7 +22,7 @@
+ #include "TSRM.h"
+ #endif
+ 
+-#define MAGICKWAND_VERSION "0.1.9"
++#define MAGICKWAND_VERSION "0.1.8"
+ 
+ /* ************************************************************************************************************** */
+ 
+@@ -444,7 +444,6 @@
+ 	/* Custom PHP function; accepts a PHP array of filenames and attempts to read them all into the MagickWand */
+ 	ZEND_FUNCTION( magickreadimages );
+ 
+-	ZEND_FUNCTION( magickrecolorimage );
+ 	ZEND_FUNCTION( magickreducenoiseimage );
+ 	ZEND_FUNCTION( magickremoveimage );
+ 	ZEND_FUNCTION( magickremoveimageprofile );
+--- magickwand-0.1.9/magickwand_im_defs.h	2006-12-30 19:14:54.000000000 +0100
++++ magickwand-0.1.8/magickwand_im_defs.h	2005-09-12 23:37:40.000000000 +0200
+@@ -4,8 +4,8 @@
+ 
+    Author: Ouinnel Watson
+    Homepage: 
+-   Current Version: 0.1.9
+-   Release Date: 2006-12-30
++   Current Version: 0.1.8
++   Release Date: 2005-09-12
+ */
+ 
+ /* ************************************************************************************************************** */
+--- magickwand-0.1.9/magickwand_inc.h		2006-12-30 19:15:16.000000000 +0100
++++ magickwand-0.1.8/magickwand_inc.h		2005-09-13 10:08:48.000000000 +0200
+@@ -3,8 +3,8 @@
+ 
+    Author: Ouinnel Watson
+    Homepage: 
+-   Current Version: 0.1.9
+-   Release Date: 2006-12-30
++   Current Version: 0.1.8
++   Release Date: 2005-09-12
+ */
+ 
+ #include <math.h>
